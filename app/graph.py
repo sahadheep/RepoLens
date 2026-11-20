@@ -74,3 +74,37 @@ def get_graph_stats(graph: nx.DiGraph) -> dict:
         "edges": graph.number_of_edges(),
         "is_dag": nx.is_directed_acyclic_graph(graph),
     }
+
+
+def get_graph_data(graph: nx.DiGraph) -> dict:
+    if len(graph.nodes) < 2:
+        scores = {n: float(graph.in_degree(n)) for n in graph.nodes}
+    else:
+        try:
+            scores = nx.pagerank(graph, alpha=0.85, max_iter=100)
+        except Exception:
+            scores = {n: float(graph.in_degree(n)) for n in graph.nodes}
+
+    nodes = []
+    for node in graph.nodes:
+        clean_path = node.replace("\\", "/")
+        label = clean_path.split("/")[-1]
+        score = scores.get(node, 0.0)
+        nodes.append({
+            "id": clean_path,
+            "label": label,
+            "title": f"{clean_path} (PageRank: {score:.4f})",
+            "score": round(score, 5),
+            "value": max(5, int(score * 200)),
+        })
+
+    edges = [
+        {
+            "from": u.replace("\\", "/"),
+            "to": v.replace("\\", "/"),
+            "arrows": "to",
+        }
+        for u, v in graph.edges
+    ]
+    return {"nodes": nodes, "edges": edges}
+

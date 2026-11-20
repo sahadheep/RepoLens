@@ -1,16 +1,22 @@
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import database
 from app import analyzer as repo_analyzer
 from app import embedder
-from app.graph import build_graph, rank_files
+from app.graph import build_graph, rank_files, get_graph_data
 from app.models import (
     AnalyzeRequest, AnalyzeResponse,
     StructureResponse, FileInfo, SymbolInfo,
     ImportantFilesResponse, ImportantFile,
     SearchRequest, SearchResponse, SearchResult,
+    GraphResponse,
 )
+
+STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(
     title="RepoLens",
@@ -25,15 +31,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 
 @app.on_event("startup")
 def startup():
     database.init_db()
 
 
-@app.get("/", tags=["health"])
+@app.get("/", tags=["ui"])
 def root():
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
     return {"status": "ok", "message": "RepoLens is running. POST /analyze to start."}
+
+
+@app.get("/health", tags=["health"])
+def health():
+    return {"status": "ok", "message": "RepoLens is running."}
+
 
 
 @app.post("/analyze", response_model=AnalyzeResponse, tags=["analysis"])
@@ -133,6 +151,42 @@ def important_files(repo_id: int):
 
     finally:
         conn.close()
+
+
+@app.get("/repos/{repo_id}/graph", response_model=GraphResponse, tags=["analysis"])
+def repo_graph(repo_id: int):
+    conn = database.get_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM repos WHERE id = ?", (repo_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail=f"Repo {repo_id} not found.")
+
+        cursor.execute("SELECT path FROM files WHERE repo_id = ?", (repo_id,))
+        file_paths = [r["path"] for r in cursor.fetchall()]
+
+        files_with_imports = []
+        for path in file_paths:
+            cursor.execute(
+                "SELECT to_module FROM imports WHERE repo_id = ? AND from_file = ?",
+                (repo_id, path),
+            )
+            imps = [r["to_module"] for r in cursor.fetchall()]
+            files_with_imports.append((path, imps))
+
+        graph = build_graph(files_with_imports)
+        graph_data = get_graph_data(graph)
+
+        return GraphResponse(
+            repo_id=repo_id,
+            nodes=graph_data["nodes"],
+            edges=graph_data["edges"],
+        )
+
+    finally:
+        conn.close()
+
 
 
 @app.post("/repos/{repo_id}/search", response_model=SearchResponse, tags=["search"])

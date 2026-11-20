@@ -62,3 +62,10 @@ class AnalyzeResponse(BaseModel):
     url: str
     files_processed: int
     message: str
+
+
+class GraphResponse(BaseModel):
+    repo_id: int
+    nodes: List[dict]
+    edges: List[dict]
+

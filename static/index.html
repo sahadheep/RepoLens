@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RepoLens — Codebase Analysis & Exploration Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <style>
+    #graph-network {
+      width: 100%;
+      height: 600px;
+      background: #0f172a;
+      border-radius: 0.75rem;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/70 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">
+          <i data-lucide="layers" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            RepoLens
+            <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">Engine v1.0</span>
+          </h1>
+          <p class="text-xs text-slate-400">AST Parsing • PageRank Graph • Vector Semantic Search</p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <select id="repo-select" onchange="onRepoSelected()" class="bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="">Select an analyzed repo...</option>
+        </select>
+        <button onclick="openAnalyzeModal()" class="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-3.5 py-1.5 rounded-lg transition shadow-md shadow-indigo-600/20">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          <span>Analyze Repo</span>
+        </button>
+        <a href="/docs" target="_blank" class="text-xs text-slate-400 hover:text-slate-200 border border-slate-800 rounded-lg px-2.5 py-1.5 transition flex items-center gap-1">
+          <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+          <span>API Docs</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 space-y-6">
+
+    <!-- Active Repo Banner -->
+    <div id="repo-banner" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-2 text-slate-400 text-xs mb-1">
+            <i data-lucide="git-branch" class="w-3.5 h-3.5"></i>
+            <span>Active Repository</span>
+          </div>
+          <h2 id="banner-repo-url" class="text-xl font-bold text-white font-mono break-all"></h2>
+        </div>
+        <div class="flex items-center gap-4 text-sm">
+          <div class="bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 text-xs block">Files</span>
+            <span id="banner-file-count" class="font-bold text-white">0</span>
+          </div>
+          <div class="bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700/60">
+            <span class="text-slate-400 text-xs block">Symbols</span>
+            <span id="banner-symbol-count" class="font-bold text-indigo-400">0</span>
+          </div>
+          <button onclick="reanalyzeCurrent()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg border border-slate-700 transition flex items-center gap-1">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span>Re-run Cache</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="text-center py-20 bg-slate-900/40 border border-slate-800/60 rounded-2xl p-8">
+      <div class="w-16 h-16 bg-indigo-600/10 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-indigo-500/20">
+        <i data-lucide="git-pull-request" class="w-8 h-8"></i>
+      </div>
+      <h3 class="text-xl font-bold text-white mb-2">No Repository Selected</h3>
+      <p class="text-slate-400 text-sm max-w-md mx-auto mb-6">Analyze any public GitHub repository (e.g. Flask, Express, Requests) to visualize its architecture and search its codebase.</p>
+      <button onclick="openAnalyzeModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-2.5 rounded-xl transition shadow-lg shadow-indigo-600/20 inline-flex items-center gap-2">
+        <i data-lucide="sparkles" class="w-4 h-4"></i>
+        <span>Analyze Your First Repository</span>
+      </button>
+    </div>
+
+    <!-- Tabs Container -->
+    <div id="repo-views" class="hidden space-y-6">
+      
+      <!-- Navigation Tabs -->
+      <div class="border-b border-slate-800 flex space-x-6">
+        <button onclick="switchTab('graph')" id="tab-btn-graph" class="pb-3 text-sm font-semibold border-b-2 border-indigo-500 text-indigo-400 flex items-center gap-2">
+          <i data-lucide="network" class="w-4 h-4"></i>
+          <span>Dependency Graph</span>
+        </button>
+        <button onclick="switchTab('search')" id="tab-btn-search" class="pb-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2">
+          <i data-lucide="search" class="w-4 h-4"></i>
+          <span>Semantic Search</span>
+        </button>
+        <button onclick="switchTab('important')" id="tab-btn-important" class="pb-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2">
+          <i data-lucide="trending-up" class="w-4 h-4"></i>
+          <span>PageRank Hierarchy</span>
+        </button>
+        <button onclick="switchTab('structure')" id="tab-btn-structure" class="pb-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2">
+          <i data-lucide="code-2" class="w-4 h-4"></i>
+          <span>Code Structure</span>
+        </button>
+      </div>
+
+      <!-- Tab 1: Dependency Graph -->
+      <div id="tab-graph" class="space-y-3">
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span>Interactive module dependencies (Node size = PageRank score). Drag, pan, or scroll to zoom.</span>
+          <div class="flex items-center gap-2">
+            <span class="inline-block w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
+            <span>File Node</span>
+            <span class="inline-block w-2.5 h-2.5 rounded-full bg-cyan-400 ml-2"></span>
+            <span>Import Arrow</span>
+          </div>
+        </div>
+        <div id="graph-network" class="border border-slate-800 shadow-inner relative">
+          <div id="graph-loading" class="absolute inset-0 bg-slate-900/80 flex items-center justify-center">
+            <div class="text-center">
+              <i data-lucide="loader-2" class="w-8 h-8 text-indigo-400 animate-spin mx-auto mb-2"></i>
+              <p class="text-sm text-slate-300">Rendering dependency network...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Semantic Search -->
+      <div id="tab-search" class="hidden space-y-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1">Natural Language Code Query</label>
+            <div class="flex gap-2">
+              <div class="relative flex-1">
+                <i data-lucide="search" class="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5"></i>
+                <input id="search-query" type="text" placeholder="e.g. where are route endpoints handled? or password authentication" 
+                  onkeydown="if(event.key==='Enter') executeSearch()"
+                  class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              </div>
+              <button onclick="executeSearch()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-5 py-2 rounded-lg text-sm transition flex items-center gap-1.5 shadow-md shadow-indigo-600/20">
+                <i data-lucide="sparkles" class="w-4 h-4"></i>
+                <span>Search</span>
+              </button>
+            </div>
+          </div>
+          <div class="flex items-center gap-4 text-xs text-slate-400">
+            <span>Results to return:</span>
+            <div class="flex gap-2">
+              <button onclick="setTopK(3)" class="topk-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700" data-k="3">Top 3</button>
+              <button onclick="setTopK(5)" class="topk-btn px-2.5 py-1 rounded bg-indigo-600 text-white border border-indigo-500" data-k="5">Top 5</button>
+              <button onclick="setTopK(10)" class="topk-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700" data-k="10">Top 10</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="search-results" class="space-y-3">
+          <p class="text-sm text-slate-500 italic text-center py-8">Enter a query above to search through indexed functions and classes.</p>
+        </div>
+      </div>
+
+      <!-- Tab 3: PageRank Hierarchy -->
+      <div id="tab-important" class="hidden space-y-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div class="mb-4">
+            <h3 class="text-base font-bold text-white flex items-center gap-2">
+              <i data-lucide="award" class="w-5 h-5 text-amber-400"></i>
+              Core Architectural Modules (PageRank)
+            </h3>
+            <p class="text-xs text-slate-400">Ranked by how many central modules import them across the entire codebase.</p>
+          </div>
+          <div id="important-list" class="space-y-2"></div>
+        </div>
+      </div>
+
+      <!-- Tab 4: Code Structure -->
+      <div id="tab-structure" class="hidden space-y-4">
+        <div class="flex items-center justify-between">
+          <p class="text-xs text-slate-400">Extracted AST symbols (functions, classes) and imports per file.</p>
+          <input id="structure-filter" oninput="filterStructure()" type="text" placeholder="Filter files..." 
+            class="bg-slate-900 border border-slate-800 text-xs rounded-lg px-3 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+        </div>
+        <div id="structure-list" class="space-y-3 max-h-[700px] overflow-y-auto custom-scrollbar"></div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Analyze Modal -->
+  <div id="analyze-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-bold text-white flex items-center gap-2">
+          <i data-lucide="github" class="w-5 h-5 text-indigo-400"></i>
+          Analyze GitHub Repository
+        </h3>
+        <button onclick="closeAnalyzeModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      <p class="text-xs text-slate-400">Clones the repo, parses Python & JS with Tree-sitter, computes PageRank graph centrality, and generates local vector embeddings.</p>
+
+      <div>
+        <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Public GitHub Repository URL</label>
+        <input id="modal-repo-url" type="url" placeholder="https://github.com/pallets/flask" 
+          value="https://github.com/pallets/flask"
+          class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono">
+      </div>
+
+      <div id="modal-status" class="hidden text-xs p-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 flex items-center gap-2">
+        <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
+        <span id="modal-status-text">Cloning and indexing repository...</span>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeAnalyzeModal()" class="px-4 py-2 text-sm text-slate-400 hover:text-white rounded-lg">Cancel</button>
+        <button id="modal-submit-btn" onclick="submitAnalyze()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-lg text-sm transition flex items-center gap-2 shadow-lg shadow-indigo-600/20">
+          <span>Start Analysis</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let activeRepoId = null;
+    let reposList = [];
+    let currentTopK = 5;
+    let networkInstance = null;
+    let fullStructureData = [];
+
+    document.addEventListener("DOMContentLoaded", () => {
+      lucide.createIcons();
+      loadRepos();
+    });
+
+    async function loadRepos() {
+      try {
+        const res = await fetch("/repos");
+        if (!res.ok) return;
+        reposList = await res.json();
+        const select = document.getElementById("repo-select");
+        select.innerHTML = '<option value="">Select an analyzed repo...</option>';
+        reposList.forEach(r => {
+          const opt = document.createElement("option");
+          opt.value = r.id;
+          opt.textContent = `${r.url.replace("https://github.com/", "")} (${r.file_count} files)`;
+          select.appendChild(opt);
+        });
+
+        if (reposList.length > 0 && !activeRepoId) {
+          select.value = reposList[0].id;
+          onRepoSelected();
+        }
+      } catch (err) {
+        console.error("Failed to load repos:", err);
+      }
+    }
+
+    async function onRepoSelected() {
+      const select = document.getElementById("repo-select");
+      const repoId = parseInt(select.value);
+      if (!repoId) {
+        document.getElementById("empty-state").classList.remove("hidden");
+        document.getElementById("repo-banner").classList.add("hidden");
+        document.getElementById("repo-views").classList.add("hidden");
+        activeRepoId = null;
+        return;
+      }
+
+      activeRepoId = repoId;
+      const repo = reposList.find(r => r.id === repoId);
+      if (repo) {
+        document.getElementById("banner-repo-url").textContent = repo.url;
+        document.getElementById("banner-file-count").textContent = repo.file_count;
+        document.getElementById("banner-symbol-count").textContent = repo.symbol_count;
+      }
+
+      document.getElementById("empty-state").classList.add("hidden");
+      document.getElementById("repo-banner").classList.remove("hidden");
+      document.getElementById("repo-views").classList.remove("hidden");
+
+      loadGraphData();
+      loadImportantFiles();
+      loadStructure();
+    }
+
+    function switchTab(tab) {
+      ["graph", "search", "important", "structure"].forEach(t => {
+        document.getElementById(`tab-${t}`).classList.add("hidden");
+        const btn = document.getElementById(`tab-btn-${t}`);
+        btn.classList.remove("border-indigo-500", "text-indigo-400");
+        btn.classList.add("border-transparent", "text-slate-400");
+      });
+
+      document.getElementById(`tab-${tab}`).classList.remove("hidden");
+      const activeBtn = document.getElementById(`tab-btn-${tab}`);
+      activeBtn.classList.add("border-indigo-500", "text-indigo-400");
+      activeBtn.classList.remove("border-transparent", "text-slate-400");
+
+      if (tab === "graph" && networkInstance) {
+        setTimeout(() => networkInstance.fit(), 100);
+      }
+    }
+
+    async function loadGraphData() {
+      const loading = document.getElementById("graph-loading");
+      loading.classList.remove("hidden");
+      try {
+        const res = await fetch(`/repos/${activeRepoId}/graph`);
+        const data = await res.json();
+
+        const container = document.getElementById("graph-network");
+        const nodes = new vis.DataSet(data.nodes.map(n => ({
+          id: n.id,
+          label: n.label,
+          title: n.title,
+          value: n.value,
+          color: {
+            background: "#6366f1",
+            border: "#818cf8",
+            highlight: { background: "#4f46e5", border: "#a5b4fc" }
+          },
+          font: { color: "#e2e8f0", size: 12, face: "monospace" },
+          shape: "dot"
+        })));
+
+        const edges = new vis.DataSet(data.edges.map(e => ({
+          from: e.from,
+          to: e.to,
+          arrows: "to",
+          color: { color: "#334155", highlight: "#38bdf8" },
+          smooth: { type: "continuous" }
+        })));
+
+        const options = {
+          physics: {
+            stabilization: false,
+            barnesHut: { gravitationalConstant: -3000, springLength: 95 }
+          },
+          interaction: { hover: true, tooltipDelay: 100 }
+        };
+
+        if (networkInstance) networkInstance.destroy();
+        networkInstance = new vis.Network(container, { nodes, edges }, options);
+      } catch (err) {
+        console.error("Error loading graph:", err);
+      } finally {
+        loading.classList.add("hidden");
+      }
+    }
+
+    async function loadImportantFiles() {
+      try {
+        const res = await fetch(`/repos/${activeRepoId}/important`);
+        const data = await res.json();
+        const list = document.getElementById("important-list");
+        list.innerHTML = "";
+
+        const maxScore = data.files.length > 0 ? data.files[0].score : 1;
+
+        data.files.forEach(f => {
+          const percent = Math.min(100, Math.round((f.score / maxScore) * 100));
+          const row = document.createElement("div");
+          row.className = "bg-slate-950 border border-slate-800/80 rounded-lg p-3 hover:border-slate-700 transition flex items-center justify-between gap-4";
+          row.innerHTML = `
+            <div class="flex items-center gap-3 min-w-0">
+              <span class="w-6 h-6 rounded-full ${f.rank <= 3 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-slate-800 text-slate-400'} flex items-center justify-center text-xs font-bold shrink-0">
+                ${f.rank}
+              </span>
+              <span class="font-mono text-sm text-slate-200 truncate">${f.path}</span>
+            </div>
+            <div class="flex items-center gap-3 shrink-0">
+              <div class="w-24 bg-slate-800 rounded-full h-2 hidden sm:block overflow-hidden">
+                <div class="bg-indigo-500 h-2 rounded-full" style="width: ${percent}%"></div>
+              </div>
+              <span class="font-mono text-xs text-indigo-400 font-semibold w-16 text-right">${f.score.toFixed(4)}</span>
+            </div>
+          `;
+          list.appendChild(row);
+        });
+      } catch (err) {
+        console.error("Error loading important files:", err);
+      }
+    }
+
+    async function loadStructure() {
+      try {
+        const res = await fetch(`/repos/${activeRepoId}/structure`);
+        const data = await res.json();
+        fullStructureData = data.files;
+        renderStructure(fullStructureData);
+      } catch (err) {
+        console.error("Error loading structure:", err);
+      }
+    }
+
+    function renderStructure(files) {
+      const container = document.getElementById("structure-list");
+      container.innerHTML = "";
+
+      files.forEach(file => {
+        const card = document.createElement("div");
+        card.className = "bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3";
+        
+        const symbolTags = file.symbols.map(s => `
+          <span class="text-xs px-2 py-0.5 rounded ${s.kind === 'class' ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/20'} font-mono">
+            ${s.kind}: ${s.name} <span class="text-slate-500 text-[10px]">L${s.start_line}-${s.end_line}</span>
+          </span>
+        `).join("");
+
+        const importTags = file.imports.map(i => `
+          <span class="text-xs px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">${i}</span>
+        `).join("");
+
+        card.innerHTML = `
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-sm text-white font-semibold">${file.path}</span>
+            <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 uppercase font-medium">${file.language}</span>
+          </div>
+          ${file.symbols.length > 0 ? `
+            <div>
+              <span class="text-xs text-slate-400 block mb-1.5">Symbols (${file.symbols.length}):</span>
+              <div class="flex flex-wrap gap-1.5">${symbolTags}</div>
+            </div>
+          ` : '<p class="text-xs text-slate-500 italic">No top-level functions or classes extracted.</p>'}
+          ${file.imports.length > 0 ? `
+            <div class="pt-2 border-t border-slate-800/80">
+              <span class="text-xs text-slate-400 block mb-1.5">Imports (${file.imports.length}):</span>
+              <div class="flex flex-wrap gap-1.5">${importTags}</div>
+            </div>
+          ` : ''}
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function filterStructure() {
+      const q = document.getElementById("structure-filter").value.toLowerCase();
+      const filtered = fullStructureData.filter(f => f.path.toLowerCase().includes(q));
+      renderStructure(filtered);
+    }
+
+    function setTopK(k) {
+      currentTopK = k;
+      document.querySelectorAll(".topk-btn").forEach(btn => {
+        if (parseInt(btn.dataset.k) === k) {
+          btn.className = "topk-btn px-2.5 py-1 rounded bg-indigo-600 text-white border border-indigo-500";
+        } else {
+          btn.className = "topk-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700";
+        }
+      });
+    }
+
+    async function executeSearch() {
+      const q = document.getElementById("search-query").value.trim();
+      if (!q) return;
+
+      const container = document.getElementById("search-results");
+      container.innerHTML = `
+        <div class="text-center py-8">
+          <i data-lucide="loader-2" class="w-6 h-6 text-indigo-400 animate-spin mx-auto mb-2"></i>
+          <p class="text-xs text-slate-400">Embedding query and computing cosine similarity against vectors...</p>
+        </div>
+      `;
+      lucide.createIcons();
+
+      try {
+        const res = await fetch(`/repos/${activeRepoId}/search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: q, top_k: currentTopK })
+        });
+        const data = await res.json();
+        container.innerHTML = "";
+
+        if (data.results.length === 0) {
+          container.innerHTML = '<p class="text-sm text-slate-400 text-center py-6">No matching symbols found.</p>';
+          return;
+        }
+
+        data.results.forEach((r, idx) => {
+          const card = document.createElement("div");
+          card.className = "bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2 hover:border-slate-700 transition";
+          card.innerHTML = `
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="text-xs px-2 py-0.5 rounded ${r.kind === 'class' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'} font-semibold font-mono">
+                  ${r.kind} ${r.symbol_name}
+                </span>
+                <span class="text-xs text-slate-400 font-mono">${r.file_path} (lines ${r.start_line}-${r.end_line})</span>
+              </div>
+              <span class="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-semibold">
+                Score: ${(r.score * 100).toFixed(1)}%
+              </span>
+            </div>
+            <pre class="bg-slate-950 p-3 rounded-lg text-xs font-mono text-slate-300 overflow-x-auto border border-slate-800/80 custom-scrollbar"><code>${escapeHtml(r.snippet)}</code></pre>
+          `;
+          container.appendChild(card);
+        });
+      } catch (err) {
+        container.innerHTML = `<p class="text-sm text-rose-400 text-center py-6">Search failed: ${err.message}</p>`;
+      }
+    }
+
+    function openAnalyzeModal() {
+      document.getElementById("analyze-modal").classList.remove("hidden");
+    }
+
+    function closeAnalyzeModal() {
+      document.getElementById("analyze-modal").classList.add("hidden");
+      document.getElementById("modal-status").classList.add("hidden");
+    }
+
+    async function submitAnalyze() {
+      const url = document.getElementById("modal-repo-url").value.trim();
+      if (!url) return;
+
+      const statusBox = document.getElementById("modal-status");
+      const submitBtn = document.getElementById("modal-submit-btn");
+      statusBox.classList.remove("hidden");
+      submitBtn.disabled = true;
+
+      try {
+        const res = await fetch("/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Analysis failed");
+
+        closeAnalyzeModal();
+        await loadRepos();
+        document.getElementById("repo-select").value = data.repo_id;
+        onRepoSelected();
+      } catch (err) {
+        alert("Error: " + err.message);
+      } finally {
+        statusBox.classList.add("hidden");
+        submitBtn.disabled = false;
+      }
+    }
+
+    function reanalyzeCurrent() {
+      const repo = reposList.find(r => r.id === activeRepoId);
+      if (repo) {
+        document.getElementById("modal-repo-url").value = repo.url;
+        openAnalyzeModal();
+        submitAnalyze();
+      }
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+  </script>
+</body>
+</html>
