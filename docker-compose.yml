@@ -11,3 +11,4 @@ services:
       - PYTHONIOENCODING=utf-8
       - PYTHONUTF8=1
     restart: unless-stopped
+

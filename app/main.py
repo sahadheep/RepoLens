@@ -1,5 +1,6 @@
+import json
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +14,8 @@ from app.models import (
     StructureResponse, FileInfo, SymbolInfo,
     ImportantFilesResponse, ImportantFile,
     SearchRequest, SearchResponse, SearchResult,
-    GraphResponse,
+    GraphResponse, RepoStatusResponse,
+    CallEdgeModel, RepoDumpResponse,
 )
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -53,16 +55,77 @@ def health():
     return {"status": "ok", "message": "RepoLens is running."}
 
 
-
-@app.post("/analyze", response_model=AnalyzeResponse, tags=["analysis"])
-def analyze(request: AnalyzeRequest):
+@app.post("/analyze", response_model=AnalyzeResponse, tags=["analysis"], status_code=202)
+def analyze(request: AnalyzeRequest, background_tasks: BackgroundTasks):
     try:
-        result = repo_analyzer.analyze_repo(request.url)
-        return AnalyzeResponse(**result)
+        repo_id = repo_analyzer.prepare_repo(request.url)
+        if request.sync:
+            result = repo_analyzer.analyze_repo(request.url, repo_id=repo_id)
+            return AnalyzeResponse(**result)
+
+        background_tasks.add_task(repo_analyzer.analyze_repo, request.url, repo_id)
+        return AnalyzeResponse(
+            repo_id=repo_id,
+            url=request.url,
+            status="PENDING",
+            files_processed=0,
+            message="Analysis started in background. Monitor GET /repos/{repo_id}/status for live progress."
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
+
+
+@app.get("/repos/{repo_id}/status", response_model=RepoStatusResponse, tags=["analysis"])
+def repo_status(repo_id: int):
+    conn = database.get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, url, status, progress, files_processed, error_message FROM repos WHERE id = ?",
+            (repo_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Repo {repo_id} not found.")
+
+        return RepoStatusResponse(
+            repo_id=row["id"],
+            url=row["url"],
+            status=row["status"],
+            progress=row["progress"],
+            files_processed=row["files_processed"],
+            error_message=row["error_message"],
+            message=f"Current status: {row['status']} ({row['progress']}%)",
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/repos/{repo_id}/dump", response_model=RepoDumpResponse, tags=["export"])
+def repo_dump(repo_id: int):
+    conn = database.get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, clone_path FROM repos WHERE id = ?", (repo_id,))
+        repo_row = cursor.fetchone()
+        if not repo_row:
+            raise HTTPException(status_code=404, detail=f"Repo {repo_id} not found.")
+
+        struct = structure(repo_id)
+
+        cursor.execute("SELECT caller, callee FROM call_edges WHERE repo_id = ?", (repo_id,))
+        calls = [CallEdgeModel(caller=r["caller"], callee=r["callee"]) for r in cursor.fetchall()]
+
+        return RepoDumpResponse(
+            repo_id=repo_id,
+            repo_root=repo_row["clone_path"],
+            files=struct.files,
+            call_graph=calls,
+        )
+    finally:
+        conn.close()
 
 
 @app.get("/repos/{repo_id}/structure", response_model=StructureResponse, tags=["analysis"])
@@ -85,18 +148,27 @@ def structure(repo_id: int):
             file_id = file_row["id"]
 
             cursor.execute(
-                "SELECT kind, name, start_line, end_line FROM symbols WHERE file_id = ?",
+                """SELECT kind, name, start_line, end_line, symbol_id, enclosing_class, signature, fields_json, calls_json
+                   FROM symbols WHERE file_id = ?""",
                 (file_id,),
             )
-            symbols = [
-                SymbolInfo(
+            raw_symbols = cursor.fetchall()
+            symbols = []
+            for r in raw_symbols:
+                keys = r.keys()
+                f_list = json.loads(r["fields_json"]) if "fields_json" in keys and r["fields_json"] else []
+                c_list = json.loads(r["calls_json"]) if "calls_json" in keys and r["calls_json"] else []
+                symbols.append(SymbolInfo(
                     kind=r["kind"],
                     name=r["name"],
                     start_line=r["start_line"],
                     end_line=r["end_line"],
-                )
-                for r in cursor.fetchall()
-            ]
+                    id=r["symbol_id"] if "symbol_id" in keys else None,
+                    enclosing_class=r["enclosing_class"] if "enclosing_class" in keys else None,
+                    signature=r["signature"] if "signature" in keys else None,
+                    fields=f_list,
+                    calls=c_list,
+                ))
 
             cursor.execute(
                 "SELECT to_module FROM imports WHERE repo_id = ? AND from_file = ?",
@@ -188,7 +260,6 @@ def repo_graph(repo_id: int):
         conn.close()
 
 
-
 @app.post("/repos/{repo_id}/search", response_model=SearchResponse, tags=["search"])
 def search(repo_id: int, request: SearchRequest):
     conn = database.get_connection()
@@ -238,7 +309,7 @@ def list_repos():
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT r.id, r.url, r.created_at, r.updated_at,
+            SELECT r.id, r.url, r.status, r.progress, r.created_at, r.updated_at,
                    COUNT(DISTINCT f.id) AS file_count,
                    COUNT(DISTINCT s.id) AS symbol_count
             FROM repos r

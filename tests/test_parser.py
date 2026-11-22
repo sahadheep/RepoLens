@@ -10,7 +10,66 @@ from pathlib import Path
 import tempfile
 import os
 
-from app.parser import parse_file, _parse_python, _parse_javascript
+from app.parser import parse_file, _parse_python, _parse_javascript, _parse_java
+
+
+class TestJavaParsing:
+
+    def test_java_class_and_fields(self):
+        source = """\
+package com.example.service;
+import com.example.repository.OrderRepository;
+
+public class OrderService {
+    private final OrderRepository orderRepository;
+    private Long timeoutMs;
+
+    public void processOrder() {
+    }
+}
+"""
+        symbols, imports = _parse_java(source)
+        assert "com.example.repository.OrderRepository" in imports
+        class_sym = next(s for s in symbols if s.kind == "class")
+        assert class_sym.name == "OrderService"
+        assert class_sym.id == "com.example.service.OrderService"
+        assert len(class_sym.fields) == 2
+        assert any("orderRepository" in f for f in class_sym.fields)
+
+    def test_java_method_and_signature(self):
+        source = """\
+package com.example.controller;
+
+public class OrderController {
+    public ResponseEntity<Order> checkout(Long id, String coupon) {
+        return null;
+    }
+}
+"""
+        symbols, imports = _parse_java(source)
+        method_sym = next(s for s in symbols if s.kind == "method")
+        assert method_sym.name == "checkout"
+        assert method_sym.id == "com.example.controller.OrderController#checkout(Long,String)"
+        assert "ResponseEntity<Order> checkout" in method_sym.signature
+
+    def test_java_calls_extraction(self):
+        source = """\
+package com.example.service;
+import com.example.repository.OrderRepository;
+
+public class OrderService {
+    private final OrderRepository orderRepository;
+
+    public void run(Long id) {
+        orderRepository.findById(id);
+    }
+}
+"""
+        symbols, imports = _parse_java(source)
+        method_sym = next(s for s in symbols if s.kind == "method")
+        assert len(method_sym.calls) >= 1
+        assert any("OrderRepository#findById" in c for c in method_sym.calls)
+
 
 
 # ── Python tests ─────────────────────────────────────────────────────────────
@@ -160,6 +219,18 @@ class TestParseFile:
         assert result is not None
         assert result.language == "javascript"
         assert any(s.name == "run" for s in result.symbols)
+
+    def test_parses_java_file(self, tmp_path):
+        """parse_file correctly handles a real .java file on disk."""
+        source = "public class Hello { public void say() {} }\n"
+        f = tmp_path / "Hello.java"
+        f.write_text(source)
+
+        result = parse_file(f, tmp_path)
+        assert result is not None
+        assert result.language == "java"
+        assert any(s.name == "Hello" for s in result.symbols)
+
 
     def test_skips_unsupported_extension(self, tmp_path):
         """parse_file returns None for unsupported file types."""

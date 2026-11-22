@@ -18,6 +18,7 @@ SKIP_DIRS = {
 SUPPORTED_EXTENSIONS = {
     ".py": "python",
     ".js": "javascript",
+    ".java": "java",
 }
 
 REPOS_DIR = Path(__file__).parent.parent / "repos"

@@ -1,9 +1,10 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 
 class AnalyzeRequest(BaseModel):
     url: str
+    sync: bool = False
 
 
 class SearchRequest(BaseModel):
@@ -16,6 +17,11 @@ class SymbolInfo(BaseModel):
     name: str
     start_line: int
     end_line: int
+    id: Optional[str] = None
+    enclosing_class: Optional[str] = None
+    signature: Optional[str] = None
+    fields: List[str] = []
+    calls: List[str] = []
 
 
 class FileInfo(BaseModel):
@@ -60,12 +66,34 @@ class SearchResponse(BaseModel):
 class AnalyzeResponse(BaseModel):
     repo_id: int
     url: str
-    files_processed: int
-    message: str
+    status: str = "READY"
+    files_processed: int = 0
+    message: str = ""
+
+
+class RepoStatusResponse(BaseModel):
+    repo_id: int
+    url: str
+    status: str
+    progress: int
+    files_processed: int = 0
+    error_message: Optional[str] = None
+    message: Optional[str] = None
+
+
+class CallEdgeModel(BaseModel):
+    caller: str
+    callee: str
+
+
+class RepoDumpResponse(BaseModel):
+    repo_id: int
+    repo_root: str
+    files: List[FileInfo]
+    call_graph: List[CallEdgeModel]
 
 
 class GraphResponse(BaseModel):
     repo_id: int
     nodes: List[dict]
     edges: List[dict]
-
