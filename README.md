@@ -1,168 +1,147 @@
 # RepoLens
 
-> A code analysis engine for GitHub repositories — understand any codebase in seconds.
+RepoLens is a static analysis and code intelligence engine for GitHub repositories. It clones codebases, parses Abstract Syntax Trees across Java, Python, and JavaScript, maps how functions and files depend on each other, computes PageRank scores to identify core architectural modules, and provides fast local semantic search.
 
-RepoLens clones a GitHub repo, parses every Python and JavaScript file, builds a map of how the code connects, and exposes everything through a clean REST API. Designed as a portfolio project by a CS student, for CS students.
-
----
-
-## Architecture
-
-```mermaid
-flowchart TD
-    Client -->|POST /analyze| API["FastAPI (main.py)"]
-    API --> Analyzer["analyzer.py (Orchestrator)"]
-    Analyzer --> Utils["utils.py (Clone + Walk)"]
-    Analyzer --> Parser["parser.py (tree-sitter)"]
-    Analyzer --> Graph["graph.py (networkx)"]
-    Analyzer --> Embedder["embedder.py (sentence-transformers)"]
-    Analyzer --> DB[("SQLite repolens.db")]
-
-    Client -->|GET /repos/1/structure| API
-    Client -->|GET /repos/1/important| API
-    Client -->|POST /repos/1/search| API
-    API --> DB
-```
-
-**Data flow for a fresh analysis:**
-1. Client sends a GitHub URL
-2. `utils.py` clones the repo to `repos/`
-3. `parser.py` reads each `.py` / `.js` file with tree-sitter and extracts functions, classes, imports
-4. `graph.py` builds a directed graph and runs PageRank
-5. `embedder.py` converts every function/class into a meaning vector using a local AI model
-6. Everything is stored in SQLite, including file hashes so unchanged files are skipped on re-run
+It also serves as the structural foundation for an automated interview question generation pipeline, exporting method-level call graphs to downstream services.
 
 ---
 
-## Quick Start
+## What It Does
 
-### 1. Prerequisites
-
-- Python 3.11 or higher
-- Git (must be in PATH)
-- ~1 GB free disk (for PyTorch and the AI model)
-
-### 2. Set Up
-
-```bash
-# Clone this repo
-git clone https://github.com/your-username/repolens.git
-cd repolens
-
-# Create a virtual environment
-python -m venv venv
-
-# Activate it
-# Windows:
-venv\Scripts\activate
-# Mac/Linux:
-source venv/bin/activate
-
-# Install all dependencies (takes ~2 minutes the first time)
-pip install -r requirements.txt
-```
-
-### 3. Run the Server
-
-**Windows (recommended — sets UTF-8 encoding automatically):**
-```bash
-start.bat
-```
-
-**Or manually:**
-```bash
-# Windows — set encoding first to avoid git Unicode errors:
-$env:PYTHONIOENCODING="utf-8"; $env:PYTHONUTF8="1"; uvicorn app.main:app --reload
-
-# Mac/Linux:
-uvicorn app.main:app --reload
-```
-
-The server starts at **http://localhost:8000**
-Interactive API docs: **http://localhost:8000/docs**
+- Multi-Language AST Parsing: Uses Tree-sitter to parse Java, Python, and JavaScript source code into syntax trees. It extracts classes, fields, method signatures, parameter types, and function calls reliably without regex.
+- Dependency and Call Graphs: Models file imports and method calls as directed graphs using NetworkX. It runs the Google PageRank algorithm to surface the most critical architectural files and shared utilities in a repository.
+- Offline Semantic Search: Embeds symbols and code snippets locally using the all-MiniLM-L6-v2 Sentence-Transformer model and computes vector relevance with NumPy cosine similarity. It runs 100% locally with zero external API calls or fees.
+- Incremental SHA-256 Caching: Computes SHA-256 hashes for every file. On subsequent analysis runs, unchanged files are skipped, making re-runs fast.
+- Background Job Queue: Analysis runs asynchronously in FastAPI background tasks. The API returns an immediate acknowledgment so the client can poll live progress: PENDING -> CLONING -> PARSING -> INDEXING -> READY.
+- Interactive Web Dashboard: Includes a browser interface at http://localhost:8000 with an interactive Vis.js network graph, semantic search bar, and one-click JSON export.
 
 ---
 
-## Example API Calls
+## Architecture Flow
 
-### Analyze a Repo
+1. Client Request: A client submits a repository URL via POST /analyze.
+2. Cloning and Hashing: The repository is cloned into a workspace directory. Every source file is hashed with SHA-256 to check if it has changed since the last run.
+3. AST Parsing: Tree-sitter parses modified files into syntax trees, extracting class names, method signatures, line ranges, and call invocations.
+4. Graph Construction: NetworkX builds the dependency graph between files and methods, calculating PageRank centrality scores.
+5. Vector Embedding: Sentence-Transformers converts symbols and code snippets into dense vector embeddings.
+6. Storage: All extracted data, graph edges, and vector arrays are stored in SQLite.
+7. Query and Export: Clients query the database through REST endpoints for structure, search, or call graph exports.
 
-```bash
-curl -X POST http://localhost:8000/analyze \
-     -H "Content-Type: application/json" \
-     -d "{\"url\": \"https://github.com/pallets/flask\"}"
-```
+---
 
-**Response:**
-```json
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11 or newer
+- Git installed and available on your system path
+
+### Local Setup
+
+1. Clone this repository:
+    git clone https://github.com/sahadheep/RepoLen.git
+    cd RepoLen
+
+2. Create and activate a virtual environment:
+
+On Windows:
+    python -m venv venv
+    .\venv\Scripts\activate
+
+On Linux or macOS:
+    python -m venv venv
+    source venv/bin/activate
+
+3. Install dependencies:
+    pip install -r requirements.txt
+
+4. Run the server:
+    uvicorn app.main:app --reload
+
+Once running, access:
+- Web Dashboard: http://localhost:8000
+- API Documentation: http://localhost:8000/docs
+
+---
+
+### Running with Docker
+
+    docker compose up --build
+
+---
+
+## API Endpoints
+
+### 1. Trigger Analysis
+Starts asynchronous background analysis on a repository.
+
+Endpoint: POST /analyze
+
+Request Body:
+{
+  "url": "https://github.com/pallets/flask"
+}
+
+Response (HTTP 202 Accepted):
 {
   "repo_id": 1,
   "url": "https://github.com/pallets/flask",
+  "status": "PENDING",
+  "files_processed": 0,
+  "message": "Analysis started in background. Monitor GET /repos/1/status for live progress."
+}
+
+---
+
+### 2. Check Analysis Status
+Polls the current processing progress of a repository.
+
+Endpoint: GET /repos/1/status
+
+Response (HTTP 200 OK):
+{
+  "repo_id": 1,
+  "url": "https://github.com/pallets/flask",
+  "status": "PARSING",
+  "progress": 65,
   "files_processed": 42,
-  "message": "Done. 42 files parsed, 0 unchanged (skipped)."
+  "error_message": null,
+  "message": "Current status: PARSING (65%)"
 }
-```
 
 ---
 
-### Get the Code Structure
+### 3. Get Important Files (PageRank)
+Returns the top architectural files in the repository ordered by PageRank centrality.
 
-```bash
-curl http://localhost:8000/repos/1/structure
-```
+Endpoint: GET /repos/1/important
 
-**Response (trimmed):**
-```json
+Response (HTTP 200 OK):
 {
   "repo_id": 1,
   "files": [
-    {
-      "path": "src/flask/app.py",
-      "language": "python",
-      "symbols": [
-        {"kind": "class",    "name": "Flask",  "start_line": 90,  "end_line": 1200},
-        {"kind": "function", "name": "run",    "start_line": 940, "end_line": 980}
-      ],
-      "imports": ["os", "sys", "click", "werkzeug"]
-    }
+    { "path": "src/flask/app.py", "score": 0.042189, "rank": 1 },
+    { "path": "src/flask/helpers.py", "score": 0.038412, "rank": 2 }
   ]
 }
-```
 
 ---
 
-### Find the Most Important Files
+### 4. Semantic Code Search
+Searches the repository using natural language questions.
 
-```bash
-curl http://localhost:8000/repos/1/important
-```
+Endpoint: POST /repos/1/search
 
-**Response:**
-```json
+Request Body:
 {
-  "repo_id": 1,
-  "files": [
-    {"path": "src/flask/app.py",     "score": 0.042, "rank": 1},
-    {"path": "src/flask/helpers.py", "score": 0.038, "rank": 2}
-  ]
+  "query": "where are route endpoints and URL rules registered?",
+  "top_k": 3
 }
-```
 
----
-
-### Search by Meaning
-
-```bash
-curl -X POST http://localhost:8000/repos/1/search \
-     -H "Content-Type: application/json" \
-     -d "{\"query\": \"where is request routing handled?\", \"top_k\": 3}"
-```
-
-**Response:**
-```json
+Response (HTTP 200 OK):
 {
   "repo_id": 1,
-  "query": "where is request routing handled?",
+  "query": "where are route endpoints and URL rules registered?",
   "results": [
     {
       "file_path": "src/flask/app.py",
@@ -170,97 +149,90 @@ curl -X POST http://localhost:8000/repos/1/search \
       "kind": "function",
       "start_line": 402,
       "end_line": 460,
-      "score": 0.7821,
+      "score": 0.8124,
       "snippet": "def add_url_rule(self, rule, endpoint=None, view_func=None..."
     }
   ]
 }
-```
 
 ---
 
-### Re-Run (Fast)
+### 5. Export Call Graph (Context Dump)
+Exports the full structural model and method-to-method call graph.
 
-Just POST the same URL again. Files that have not changed are skipped:
+Endpoint: GET /repos/1/dump
 
-```bash
-curl -X POST http://localhost:8000/analyze \
-     -H "Content-Type: application/json" \
-     -d "{\"url\": \"https://github.com/pallets/flask\"}"
-```
-
-Response: `"Done. 0 files parsed, 42 unchanged (skipped)."`
-
----
-
-### List All Analyzed Repos
-
-```bash
-curl http://localhost:8000/repos
-```
-
----
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-Note: `test_embedder.py::TestEmbedText` loads the AI model (~80 MB download on first run). Subsequent runs are fast because the model is cached.
+Response (HTTP 200 OK):
+{
+  "repo_id": 1,
+  "repo_root": "repos/my-org__order-service",
+  "files": [
+    {
+      "path": "src/main/java/com/example/OrderService.java",
+      "language": "java",
+      "symbols": [
+        {
+          "id": "com.example.OrderService#processOrder(Long)",
+          "kind": "method",
+          "name": "processOrder",
+          "enclosing_class": "com.example.OrderService",
+          "signature": "public Order processOrder(Long orderId)",
+          "start_line": 40,
+          "end_line": 62,
+          "fields": ["private final OrderRepository orderRepo;"],
+          "calls": ["com.example.OrderRepository#findById"]
+        }
+      ],
+      "imports": ["com.example.OrderRepository"]
+    }
+  ],
+  "call_graph": [
+    {
+      "caller": "com.example.OrderController#checkout",
+      "callee": "com.example.OrderService#processOrder"
+    }
+  ]
+}
 
 ---
 
 ## Project Structure
 
-```
 RepoLen/
-├── app/
-│   ├── main.py        # FastAPI routes (the API layer)
-│   ├── analyzer.py    # Orchestrator (ties everything together)
-│   ├── parser.py      # tree-sitter code parser
-│   ├── graph.py       # networkx dependency graph + PageRank
-│   ├── embedder.py    # sentence-transformers + numpy search
-│   ├── database.py    # SQLite setup
-│   ├── models.py      # Pydantic request/response models
-│   └── utils.py       # File walking, git clone, hashing
-├── tests/
-│   ├── test_parser.py
-│   ├── test_graph.py
-│   ├── test_embedder.py
-│   └── test_rerun.py
-├── docs/
-│   └── EXPLAINED.md   # Plain-English explanation of everything
-├── requirements.txt
-└── README.md
-```
+- app/
+  - main.py: FastAPI application and API routes
+  - analyzer.py: Analysis pipeline and background task runner
+  - parser.py: Tree-sitter AST parser (Java, Python, JS)
+  - graph.py: Dependency graph and PageRank calculation
+  - embedder.py: Local sentence-transformers vector search
+  - database.py: SQLite schema, migrations, and queries
+  - models.py: Pydantic models for request and response validation
+  - utils.py: Git cloning, file walking, and SHA-256 hashing
+- static/
+  - index.html: Interactive web dashboard (Vis.js network graph)
+- tests/
+  - test_parser.py: AST parsing tests across Java, Python, and JS
+  - test_graph.py: Dependency graph and PageRank tests
+  - test_embedder.py: Vector embedding and similarity tests
+  - test_rerun.py: File hash caching and re-run tests
+  - test_errors.py: Error handling and edge case tests
+- Dockerfile: Docker container setup
+- docker-compose.yml: Docker Compose configuration
+- requirements.txt: Project dependencies
+- README.md
 
 ---
 
-## Limitations (Being Honest)
+## Running Tests
 
-| Limitation | Why |
-|---|---|
-| Public repos only | We use plain git clone with no auth tokens |
-| Python and JS only | tree-sitter grammars are only set up for these two |
-| Import resolution is best-effort | We match module names to file paths using simple heuristics; complex cases may not resolve |
-| No incremental graph updates | The full dependency graph is rebuilt on every analysis |
-| No streaming responses | Large repos (1000+ files) may take 1-5 minutes for the initial analysis |
-| Single-process SQLite | Fine for local use; would need Postgres for multiple concurrent users |
-| Model is 80 MB | Downloads automatically on first run; needs internet access once |
+Run the full test suite with pytest:
+
+    pytest tests/ -v
+
+All 54 tests verify AST parsing, graph algorithms, vector embeddings, re-analysis caching, and error handling.
 
 ---
 
-## Good Commit Messages
+## License
 
-```
-feat: add project skeleton, database schema, and utility helpers
-feat: add tree-sitter parser for Python and JavaScript
-feat: add networkx dependency graph and PageRank file ranking
-feat: add sentence-transformers semantic search with numpy cosine similarity
-feat: add file hashing for fast re-run (skip unchanged files)
-feat: add FastAPI routes for all four endpoints
-test: add pytest tests for parser, graph, embedder, and re-run logic
-docs: add README with architecture diagram, API examples, and limitations
-docs: add EXPLAINED.md with plain-English walkthrough for beginners
-```
+This project is licensed under the MIT License.
