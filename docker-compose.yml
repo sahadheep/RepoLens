@@ -1,0 +1,14 @@
+services:
+  repolens:
+    build: .
+    container_name: repolens-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./repos:/app/repos
+      - ./repolens.db:/app/repolens.db
+    environment:
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+    restart: unless-stopped
+
